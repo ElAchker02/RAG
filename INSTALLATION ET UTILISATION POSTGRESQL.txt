@@ -1,0 +1,59 @@
+# INSTALLATION ET UTILISATION POSTGRESQL 16 (SEPARÉ)
+
+## 1) Installer PostgreSQL 16
+
+sudo dnf install -y https://download.postgresql.org/pub/repos/yum/reporpms/EL-9-x86_64/pgdg-redhat-repo-latest.noarch.rpm
+sudo dnf -qy module disable postgresql
+sudo dnf install -y postgresql16 postgresql16-server postgresql16-contrib
+
+## 2) Initialiser la base
+
+sudo /usr/pgsql-16/bin/postgresql-16-setup initdb
+
+## 3) Changer le port (éviter conflit avec PostgreSQL 13)
+
+sudo nano /var/lib/pgsql/16/data/postgresql.conf
+
+Modifier :
+port = 5433
+
+## 4) Démarrer PostgreSQL 16
+
+sudo systemctl enable --now postgresql-16
+sudo systemctl restart postgresql-16
+sudo systemctl status postgresql-16
+
+## 5) Accéder à PostgreSQL 16 (sans mot de passe)
+
+sudo -iu postgres /usr/pgsql-16/bin/psql -p 5433
+
+## 6) Vérifier la version
+
+SELECT version();
+
+## 7) Définir mot de passe postgres
+
+ALTER USER postgres WITH PASSWORD 'postgres123';
+
+## 8) Créer base de données
+
+CREATE DATABASE ragdb OWNER postgres;
+
+## 9) Quitter
+
+\q
+
+## 10) Accéder à la base depuis terminal
+
+/usr/pgsql-16/bin/psql -h localhost -p 5433 -U postgres -d ragdb
+
+## 11) Infos importantes
+
+PostgreSQL 13 (ancien) :
+psql
+
+PostgreSQL 16 (nouveau) :
+/usr/pgsql-16/bin/psql
+
+Port PostgreSQL 13 : 5432
+Port PostgreSQL 16 : 5433
