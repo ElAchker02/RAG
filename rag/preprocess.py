@@ -16,7 +16,7 @@ from typing import Any, Dict, Iterable, List, Tuple
 
 
 BANNED_TYPES = {"Footer", "Header", "PageBreak"}
-ALLOWED_TYPES = {"Title", "NarrativeText", "ListItem", "Text"}
+ALLOWED_TYPES = {"Title", "NarrativeText", "ListItem", "Text", "Table", "Image"}
 
 
 def normalize_text(text: str) -> str:
@@ -64,23 +64,39 @@ def clean_elements(raw_elements: Iterable[Dict[str, Any]]) -> Tuple[List[Dict[st
             removed += 1
             continue
 
+        md = el.get("metadata") or {}
+        base: Dict[str, Any] = {
+            "id": idx,
+            "type": el_type,
+            "metadata": {
+                "filename": md.get("filename"),
+                "page_number": md.get("page_number"),
+            },
+        }
+
+        if el_type == "Image":
+            base["image_base64"] = el.get("image_base64")
+            base["image_mime_type"] = el.get("image_mime_type")
+            cleaned.append(base)
+            continue
+
+        if el_type == "Table":
+            base["table_html"] = (
+                el.get("table_html")
+                or md.get("text_as_html")
+                or md.get("table_as_html")
+                or md.get("html")
+            )
+            cleaned.append(base)
+            continue
+
         text = normalize_text(str(el.get("text") or ""))
         if is_noise_text(text, el_type):
             removed += 1
             continue
 
-        md = el.get("metadata") or {}
-        cleaned.append(
-            {
-                "id": idx,
-                "type": el_type,
-                "text": text,
-                "metadata": {
-                    "filename": md.get("filename"),
-                    "page_number": md.get("page_number"),
-                },
-            }
-        )
+        base["text"] = text
+        cleaned.append(base)
 
     return cleaned, removed
 
@@ -90,16 +106,23 @@ def build_sections(cleaned_elements: List[Dict[str, Any]]) -> List[Dict[str, Any
     current_title = "Document"
     current_text_parts: List[str] = []
     current_pages: List[int] = []
+    current_has_table = False
+    current_has_image = False
+    current_tables_html: List[str] = []
+    current_images_base64: List[str] = []
     section_id = 0
 
     def flush_section() -> None:
-        nonlocal section_id, current_text_parts, current_pages
-        if not current_text_parts:
+        nonlocal section_id, current_text_parts, current_pages, current_has_table, current_has_image
+        nonlocal current_tables_html, current_images_base64
+        if not current_text_parts and not current_has_table and not current_has_image:
             return
         section_text = normalize_text(" ".join(current_text_parts))
-        if len(section_text) < 40:
+        if len(section_text) < 40 and not (current_has_table or current_has_image):
             current_text_parts = []
             current_pages = []
+            current_tables_html = []
+            current_images_base64 = []
             return
         section_id += 1
         sections.append(
@@ -109,25 +132,51 @@ def build_sections(cleaned_elements: List[Dict[str, Any]]) -> List[Dict[str, Any
                 "text": section_text,
                 "page_start": min(current_pages) if current_pages else None,
                 "page_end": max(current_pages) if current_pages else None,
+                "has_table": current_has_table,
+                "has_image": current_has_image,
+                "tables_html": current_tables_html,
+                "images_base64": current_images_base64,
             }
         )
         current_text_parts = []
         current_pages = []
+        current_has_table = False
+        current_has_image = False
+        current_tables_html = []
+        current_images_base64 = []
 
     for el in cleaned_elements:
         el_type = el["type"]
-        text = el["text"]
+        text = el.get("text", "")
         page_number = el["metadata"].get("page_number")
         if isinstance(page_number, int):
             current_pages.append(page_number)
 
         if el_type == "Title":
+            # Keep numbered sub-headings inside the current section.
+            if re.match(r"^\d+\.\s+", text):
+                current_text_parts.append(text)
+                continue
             flush_section()
             current_title = text
             continue
 
-        # Grouping rule requested: each Title with following NarrativeText blocks.
-        if el_type == "NarrativeText":
+        if el_type == "Table":
+            current_has_table = True
+            table_html = el.get("table_html")
+            if table_html:
+                current_tables_html.append(table_html)
+            continue
+
+        if el_type == "Image":
+            current_has_image = True
+            image_b64 = el.get("image_base64")
+            if image_b64:
+                current_images_base64.append(image_b64)
+            continue
+
+        # Grouping rule: each Title with following paragraph/list content.
+        if el_type in {"NarrativeText", "ListItem"}:
             current_text_parts.append(text)
 
     flush_section()
@@ -183,6 +232,10 @@ def build_chunks(
                         "section_title": sec["section_title"],
                         "page_start": sec["page_start"],
                         "page_end": sec["page_end"],
+                        "has_table": sec.get("has_table", False),
+                        "has_image": sec.get("has_image", False),
+                        "tables_html": sec.get("tables_html", []),
+                        "images_base64": sec.get("images_base64", []),
                         "chunk_index": idx,
                     },
                 }
